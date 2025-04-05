@@ -1,0 +1,1021 @@
+// 1. Package.json
+{
+  "name": "campus-navigator",
+  "version": "1.0.0",
+  "description": "Campus Navigator & Event Hub - A mobile application for university navigation and event discovery",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "nodemon src/server.js",
+    "test": "jest"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "mongoose": "^7.6.3",
+    "cors": "^2.8.5",
+    "dotenv": "^16.3.1",
+    "jsonwebtoken": "^9.0.2",
+    "bcryptjs": "^2.4.3",
+    "socket.io": "^4.7.2",
+    "express-validator": "^7.0.1",
+    "multer": "^1.4.5-lts.1",
+    "node-geocoder": "^4.2.0",
+    "expo-server-sdk": "^3.7.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.1",
+    "jest": "^29.7.0"
+  }
+}
+
+// 2. Environment Variables (.env)
+PORT=5000
+MONGODB_URI=mongodb://localhost:27017/campus-navigator
+JWT_SECRET=your-secret-key-here
+NODE_ENV=development
+MAPBOX_ACCESS_TOKEN=your-mapbox-token-here
+
+// 3. Main Server File (src/server.js)
+require('dotenv').config();
+const express = require('express');
+const mongoose = require('mongoose');
+const cors = require('cors');
+const http = require('http');
+const socketIo = require('socket.io');
+const jwt = require('jsonwebtoken');
+const User = require('./models/User');
+const NotificationService = require('./services/notificationService');
+
+const app = express();
+const server = http.createServer(app);
+const io = socketIo(server, {
+  cors: {
+    origin: "*",
+    methods: ["GET", "POST"]
+  }
+});
+
+// Middleware
+app.use(cors());
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+
+// Database connection
+mongoose.connect(process.env.MONGODB_URI)
+  .then(() => console.log('Connected to MongoDB'))
+  .catch(err => console.error('MongoDB connection error:', err));
+
+// Socket.io connection handling
+io.on('connection', (socket) => {
+  console.log('New client connected');
+  
+  // Handle user authentication
+  socket.on('authenticate', async (token) => {
+    try {
+      const decoded = jwt.verify(token, process.env.JWT_SECRET);
+      socket.userId = decoded.userId;
+      
+      // Join user's personal room for notifications
+      socket.join(`user:${decoded.userId}`);
+    } catch (error) {
+      console.error('Socket authentication error:', error);
+    }
+  });
+
+  // Handle notification preferences
+  socket.on('updateNotificationPreferences', async (preferences) => {
+    if (!socket.userId) return;
+    
+    try {
+      await User.findByIdAndUpdate(socket.userId, {
+        'preferences.notificationSettings': preferences
+      });
+    } catch (error) {
+      console.error('Error updating notification preferences:', error);
+    }
+  });
+
+  socket.on('disconnect', () => {
+    console.log('Client disconnected');
+  });
+});
+
+// Routes
+app.use('/api/auth', require('./routes/auth'));
+app.use('/api/events', require('./routes/events'));
+app.use('/api/locations', require('./routes/locations'));
+app.use('/api/users', require('./routes/users'));
+app.use('/api/notifications', require('./routes/notifications'));
+
+// Error handling middleware
+app.use((err, req, res, next) => {
+  console.error(err.stack);
+  res.status(500).json({ message: 'Something went wrong!' });
+});
+
+const PORT = process.env.PORT || 5000;
+server.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
+});
+
+// 4. Models (src/models/User.js)
+const mongoose = require('mongoose');
+const bcrypt = require('bcryptjs');
+
+const userSchema = new mongoose.Schema({
+  email: {
+    type: String,
+    required: true,
+    unique: true,
+    trim: true,
+    lowercase: true
+  },
+  password: {
+    type: String,
+    required: true
+  },
+  firstName: {
+    type: String,
+    required: true,
+    trim: true
+  },
+  lastName: {
+    type: String,
+    required: true,
+    trim: true
+  },
+  avatar: {
+    type: String,
+    default: 'default-avatar.png'
+  },
+  role: {
+    type: String,
+    enum: ['student', 'faculty', 'staff', 'admin'],
+    default: 'student'
+  },
+  pushToken: {
+    type: String
+  },
+  preferences: {
+    notifications: {
+      type: Boolean,
+      default: true
+    },
+    theme: {
+      type: String,
+      enum: ['light', 'dark'],
+      default: 'light'
+    },
+    notificationSettings: {
+      eventReminders: {
+        type: Boolean,
+        default: true
+      },
+      eventUpdates: {
+        type: Boolean,
+        default: true
+      },
+      locationUpdates: {
+        type: Boolean,
+        default: true
+      },
+      announcements: {
+        type: Boolean,
+        default: true
+      },
+      nearbyEvents: {
+        type: Boolean,
+        default: true
+      }
+    }
+  },
+  savedLocations: [{
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Location'
+  }],
+  savedEvents: [{
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Event'
+  }]
+}, {
+  timestamps: true
+});
+
+// Hash password before saving
+userSchema.pre('save', async function(next) {
+  if (!this.isModified('password')) return next();
+  
+  try {
+    const salt = await bcrypt.genSalt(10);
+    this.password = await bcrypt.hash(this.password, salt);
+    next();
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Method to compare passwords
+userSchema.methods.comparePassword = async function(candidatePassword) {
+  return bcrypt.compare(candidatePassword, this.password);
+};
+
+module.exports = mongoose.model('User', userSchema);
+
+// 5. Models (src/models/Event.js)
+const mongoose = require('mongoose');
+
+const eventSchema = new mongoose.Schema({
+  title: {
+    type: String,
+    required: true,
+    trim: true
+  },
+  description: {
+    type: String,
+    required: true
+  },
+  startTime: {
+    type: Date,
+    required: true
+  },
+  endTime: {
+    type: Date,
+    required: true
+  },
+  location: {
+    type: {
+      type: String,
+      enum: ['Point'],
+      default: 'Point'
+    },
+    coordinates: {
+      type: [Number],
+      required: true
+    },
+    building: {
+      type: String,
+      required: true
+    },
+    room: String
+  },
+  category: {
+    type: String,
+    enum: ['academic', 'social', 'sports', 'cultural', 'workshop', 'other'],
+    required: true
+  },
+  organizer: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    required: true
+  },
+  attendees: [{
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User'
+  }],
+  capacity: {
+    type: Number,
+    default: 0
+  },
+  image: String,
+  tags: [String],
+  status: {
+    type: String,
+    enum: ['upcoming', 'ongoing', 'completed', 'cancelled'],
+    default: 'upcoming'
+  },
+  isPublic: {
+    type: Boolean,
+    default: true
+  }
+}, {
+  timestamps: true
+});
+
+// Create geospatial index for location-based queries
+eventSchema.index({ location: '2dsphere' });
+
+module.exports = mongoose.model('Event', eventSchema);
+
+// 6. Models (src/models/Location.js)
+const mongoose = require('mongoose');
+
+const locationSchema = new mongoose.Schema({
+  name: {
+    type: String,
+    required: true,
+    trim: true
+  },
+  type: {
+    type: String,
+    enum: ['building', 'landmark', 'facility', 'outdoor', 'parking'],
+    required: true
+  },
+  location: {
+    type: {
+      type: String,
+      enum: ['Point'],
+      default: 'Point'
+    },
+    coordinates: {
+      type: [Number],
+      required: true
+    }
+  },
+  description: String,
+  floorPlan: String,
+  images: [String],
+  facilities: [{
+    name: String,
+    type: String,
+    description: String,
+    floor: Number,
+    roomNumber: String
+  }],
+  operatingHours: {
+    weekdays: {
+      open: String,
+      close: String
+    },
+    weekends: {
+      open: String,
+      close: String
+    }
+  },
+  accessibility: {
+    wheelchair: Boolean,
+    elevator: Boolean,
+    braille: Boolean,
+    other: [String]
+  },
+  tags: [String],
+  isIndoor: {
+    type: Boolean,
+    default: false
+  }
+}, {
+  timestamps: true
+});
+
+// Create geospatial index for location-based queries
+locationSchema.index({ location: '2dsphere' });
+
+module.exports = mongoose.model('Location', locationSchema);
+
+// 7. Models (src/models/Notification.js)
+const mongoose = require('mongoose');
+
+const notificationSchema = new mongoose.Schema({
+  user: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    required: true
+  },
+  title: {
+    type: String,
+    required: true
+  },
+  message: {
+    type: String,
+    required: true
+  },
+  type: {
+    type: String,
+    enum: ['event', 'location', 'system', 'announcement'],
+    required: true
+  },
+  relatedEvent: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Event'
+  },
+  relatedLocation: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Location'
+  },
+  isRead: {
+    type: Boolean,
+    default: false
+  },
+  priority: {
+    type: String,
+    enum: ['low', 'medium', 'high'],
+    default: 'medium'
+  },
+  pushNotification: {
+    type: Boolean,
+    default: true
+  },
+  data: {
+    type: Map,
+    of: mongoose.Schema.Types.Mixed
+  }
+}, {
+  timestamps: true
+});
+
+// Index for faster queries
+notificationSchema.index({ user: 1, createdAt: -1 });
+notificationSchema.index({ isRead: 1 });
+
+module.exports = mongoose.model('Notification', notificationSchema);
+
+// 8. Routes (src/routes/auth.js)
+const express = require('express');
+const router = express.Router();
+const jwt = require('jsonwebtoken');
+const { body, validationResult } = require('express-validator');
+const User = require('../models/User');
+
+// Register new user
+router.post('/register', [
+  body('email').isEmail().normalizeEmail(),
+  body('password').isLength({ min: 6 }),
+  body('firstName').notEmpty().trim(),
+  body('lastName').notEmpty().trim()
+], async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ errors: errors.array() });
+    }
+
+    const { email, password, firstName, lastName } = req.body;
+
+    // Check if user already exists
+    let user = await User.findOne({ email });
+    if (user) {
+      return res.status(400).json({ message: 'User already exists' });
+    }
+
+    // Create new user
+    user = new User({
+      email,
+      password,
+      firstName,
+      lastName
+    });
+
+    await user.save();
+
+    // Generate JWT token
+    const token = jwt.sign(
+      { userId: user._id },
+      process.env.JWT_SECRET,
+      { expiresIn: '24h' }
+    );
+
+    res.status(201).json({
+      token,
+      user: {
+        id: user._id,
+        email: user.email,
+        firstName: user.firstName,
+        lastName: user.lastName,
+        role: user.role
+      }
+    });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// Login user
+router.post('/login', [
+  body('email').isEmail().normalizeEmail(),
+  body('password').notEmpty()
+], async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ errors: errors.array() });
+    }
+
+    const { email, password } = req.body;
+
+    // Check if user exists
+    const user = await User.findOne({ email });
+    if (!user) {
+      return res.status(400).json({ message: 'Invalid credentials' });
+    }
+
+    // Verify password
+    const isMatch = await user.comparePassword(password);
+    if (!isMatch) {
+      return res.status(400).json({ message: 'Invalid credentials' });
+    }
+
+    // Generate JWT token
+    const token = jwt.sign(
+      { userId: user._id },
+      process.env.JWT_SECRET,
+      { expiresIn: '24h' }
+    );
+
+    res.json({
+      token,
+      user: {
+        id: user._id,
+        email: user.email,
+        firstName: user.firstName,
+        lastName: user.lastName,
+        role: user.role
+      }
+    });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+module.exports = router;
+
+// 9. Routes (src/routes/events.js)
+const express = require('express');
+const router = express.Router();
+const auth = require('../middleware/auth');
+const Event = require('../models/Event');
+const { body, validationResult } = require('express-validator');
+const NotificationService = require('../services/notificationService');
+
+// Get all events
+router.get('/', async (req, res) => {
+  try {
+    const events = await Event.find()
+      .populate('organizer', 'firstName lastName')
+      .sort({ startTime: 1 });
+    res.json(events);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// Get events near a location
+router.get('/nearby', async (req, res) => {
+  try {
+    const { longitude, latitude, maxDistance = 1000 } = req.query;
+    
+    const events = await Event.find({
+      location: {
+        $near: {
+          $geometry: {
+            type: 'Point',
+            coordinates: [parseFloat(longitude), parseFloat(latitude)]
+          },
+          $maxDistance: parseInt(maxDistance)
+        }
+      }
+    })
+    .populate('organizer', 'firstName lastName')
+    .sort({ startTime: 1 });
+
+    res.json(events);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// Create new event
+router.post('/', [
+  auth,
+  body('title').notEmpty().trim(),
+  body('description').notEmpty(),
+  body('startTime').isISO8601(),
+  body('endTime').isISO8601(),
+  body('location.coordinates').isArray(),
+  body('location.building').notEmpty(),
+  body('category').isIn(['academic', 'social', 'sports', 'cultural', 'workshop', 'other'])
+], async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ errors: errors.array() });
+    }
+
+    const event = new Event({
+      ...req.body,
+      organizer: req.user.userId
+    });
+
+    await event.save();
+    
+    // Notify relevant users about the new event (optional)
+    // await NotificationService.createEventNotification(event, 'new');
+    
+    res.status(201).json(event);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// Update event
+router.put('/:id', auth, async (req, res) => {
+  try {
+    const event = await Event.findById(req.params.id);
+    
+    if (!event) {
+      return res.status(404).json({ message: 'Event not found' });
+    }
+
+    if (event.organizer.toString() !== req.user.userId) {
+      return res.status(403).json({ message: 'Not authorized' });
+    }
+
+    const updatedEvent = await Event.findByIdAndUpdate(
+      req.params.id,
+      { $set: req.body },
+      { new: true }
+    );
+    
+    // Notify attendees about the update
+    // await NotificationService.createEventNotification(updatedEvent, 'updated');
+
+    res.json(updatedEvent);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// Delete event
+router.delete('/:id', auth, async (req, res) => {
+  try {
+    const event = await Event.findById(req.params.id);
+    
+    if (!event) {
+      return res.status(404).json({ message: 'Event not found' });
+    }
+
+    if (event.organizer.toString() !== req.user.userId) {
+      return res.status(403).json({ message: 'Not authorized' });
+    }
+
+    // Notify attendees about cancellation
+    // await NotificationService.createEventNotification(event, 'cancelled');
+    
+    await Event.findByIdAndDelete(req.params.id);
+    res.json({ message: 'Event removed' });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// Register for event
+router.post('/:id/register', auth, async (req, res) => {
+  try {
+    const event = await Event.findById(req.params.id);
+    
+    if (!event) {
+      return res.status(404).json({ message: 'Event not found' });
+    }
+
+    if (event.attendees.includes(req.user.userId)) {
+      return res.status(400).json({ message: 'Already registered for this event' });
+    }
+
+    event.attendees.push(req.user.userId);
+    await event.save();
+
+    res.json(event);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+module.exports = router;
+
+// 10. Routes (src/routes/locations.js)
+const express = require('express');
+const router = express.Router();
+const auth = require('../middleware/auth');
+const Location = require('../models/Location');
+const { body, validationResult } = require('express-validator');
+
+// Get all locations
+router.get('/', async (req, res) => {
+  try {
+    const locations = await Location.find();
+    res.json(locations);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// Get location by ID
+router.get('/:id', async (req, res) => {
+  try {
+    const location = await Location.findById(req.params.id);
+    if (!location) {
+      return res.status(404).json({ message: 'Location not found' });
+    }
+    res.json(location);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// Get locations near a point
+router.get('/nearby', async (req, res) => {
+  try {
+    const { longitude, latitude, maxDistance = 1000, type } = req.query;
+    
+    const query = {
+      location: {
+        $near: {
+          $geometry: {
+            type: 'Point',
+            coordinates: [parseFloat(longitude), parseFloat(latitude)]
+          },
+          $maxDistance: parseInt(maxDistance)
+        }
+      }
+    };
+
+    if (type) {
+      query.type = type;
+    }
+
+    const locations = await Location.find(query);
+    res.json(locations);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// Create new location (admin only)
+router.post('/', [
+  auth,
+  body('name').notEmpty().trim(),
+  body('type').isIn(['building', 'landmark', 'facility', 'outdoor', 'parking']),
+  body('location.coordinates').isArray(),
+  body('location.coordinates').custom((value) => {
+    if (value.length !== 2 || !value.every(coord => typeof coord === 'number')) {
+      throw new Error('Coordinates must be an array of two numbers [longitude, latitude]');
+    }
+    return true;
+  })
+], async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ errors: errors.array() });
+    }
+
+    const location = new Location(req.body);
+    await location.save();
+    res.status(201).json(location);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// Update location (admin only)
+router.put('/:id', auth, async (req, res) => {
+  try {
+    const location = await Location.findById(req.params.id);
+    
+    if (!location) {
+      return res.status(404).json({ message: 'Location not found' });
+    }
+
+    const updatedLocation = await Location.findByIdAndUpdate(
+      req.params.id,
+      { $set: req.body },
+      { new: true }
+    );
+
+    res.json(updatedLocation);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// Delete location (admin only)
+router.delete('/:id', auth, async (req, res) => {
+  try {
+    const location = await Location.findById(req.params.id);
+    
+    if (!location) {
+      return res.status(404).json({ message: 'Location not found' });
+    }
+
+    await Location.findByIdAndDelete(req.params.id);
+    res.json({ message: 'Location removed' });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// Search locations
+router.get('/search/:query', async (req, res) => {
+  try {
+    const { query } = req.params;
+    const locations = await Location.find({
+      $or: [
+        { name: { $regex: query, $options: 'i' } },
+        { description: { $regex: query, $options: 'i' } },
+        { tags: { $regex: query, $options: 'i' } }
+      ]
+    });
+    res.json(locations);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+module.exports = router;
+
+// 11. Routes (src/routes/notifications.js)
+const express = require('express');
+const router = express.Router();
+const auth = require('../middleware/auth');
+const NotificationService = require('../services/notificationService');
+const Notification = require('../models/Notification');
+const User = require('../models/User');
+
+// Get user notifications
+router.get('/', auth, async (req, res) => {
+  try {
+    const { limit = 20, skip = 0, unreadOnly = false } = req.query;
+    const result = await NotificationService.getUserNotifications(req.user.userId, {
+      limit: parseInt(limit),
+      skip: parseInt(skip),
+      unreadOnly: unreadOnly === 'true'
+    });
+    res.json(result);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// Mark notification as read
+router.put('/:id/read', auth, async (req, res) => {
+  try {
+    const notification = await NotificationService.markAsRead(req.params.id, req.user.userId);
+    if (!notification) {
+      return res.status(404).json({ message: 'Notification not found' });
+    }
+    res.json(notification);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// Mark all notifications as read
+router.put('/read-all', auth, async (req, res) => {
+  try {
+    await NotificationService.markAllAsRead(req.user.userId);
+    res.json({ message: 'All notifications marked as read' });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// Update push notification token
+router.put('/push-token', auth, async (req, res) => {
+  try {
+    const { pushToken } = req.body;
+    if (!pushToken) {
+      return res.status(400).json({ message: 'Push token is required' });
+    }
+
+    await User.findByIdAndUpdate(req.user.userId, { pushToken });
+    res.json({ message: 'Push token updated successfully' });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// Get unread notification count
+router.get('/unread/count', auth, async (req, res) => {
+  try {
+    const count = await Notification.countDocuments({
+      user: req.user.userId,
+      isRead: false
+    });
+    res.json({ count });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+module.exports = router;
+
+// 12. Middleware (src/middleware/auth.js)
+const jwt = require('jsonwebtoken');
+
+module.exports = (req, res, next) => {
+  try {
+    const token = req.header('Authorization')?.replace('Bearer ', '');
+    
+    if (!token) {
+      return res.status(401).json({ message: 'No token, authorization denied' });
+    }
+
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    req.user = decoded;
+    next();
+  } catch (error) {
+    res.status(401).json({ message: 'Token is not valid' });
+  }
+};
+
+// 13. Services (src/services/notificationService.js)
+const Notification = require('../models/Notification');
+const User = require('../models/User');
+const { Expo } = require('expo-server-sdk');
+
+const expo = new Expo();
+
+class NotificationService {
+  static async createNotification(notificationData) {
+    try {
+      const notification = new Notification(notificationData);
+      await notification.save();
+
+      // If push notification is enabled, send it
+      if (notification.pushNotification) {
+        await this.sendPushNotification(notification);
+      }
+
+      return notification;
+    } catch (error) {
+      console.error('Error creating notification:', error);
+      throw error;
+    }
+  }
+
+  static async sendPushNotification(notification) {
+    try {
+      const user = await User.findById(notification.user);
+      if (!user || !user.pushToken) return;
+
+      const message = {
+        to: user.pushToken,
+        sound: 'default',
+        title: notification.title,
+        body: notification.message,
+        data: {
+          type: notification.type,
+          relatedEvent: notification.relatedEvent,
+          relatedLocation: notification.relatedLocation,
+          ...notification.data
+        }
+      };
+
+      const chunks = expo.chunkPushNotifications([message]);
+      const tickets = [];
+
+      for (let chunk of chunks) {
+        try {
+          const ticketChunk = await expo.sendPushNotificationsAsync(chunk);
+          tickets.push(...ticketChunk);
+        } catch (error) {
+          console.error('Error sending push notification:', error);
+        }
+      }
+
+      return tickets;
+    } catch (error) {
+      console.error('Error in sendPushNotification:', error);
+      throw error;
+    }
+  }
+
+  static async markAsRead(notificationId, userId) {
+    try {
+      const notification = await Notification.findOneAndUpdate(
+        { _id: notificationId, user: userId },
+        { isRead: true },
+        { new: true }
+      );
+      return notification;
+    } catch (error) {
+      console.error('Error marking notification as read:', error);
+      throw error;
+    }
+  }
+
+  static async markAllAsRead(userId) {
+    try {
+      await Notification.updateMany(
+        { user: userId, isRead: false },
+        { isRead: true }
+      );
+    } catch (error)
