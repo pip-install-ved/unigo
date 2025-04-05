@@ -1,21 +1,33 @@
 # unigo
 # Campus Navigator & Event Hub: Project Summary
 
-The Campus Navigator & Event Hub is a mobile application that transforms how students navigate and engage with their university environment. The project creates an intuitive, location-aware companion for campus life.
+🚀 Campus Navigator & Event Hub
+Campus Navigator & Event Hub is a mobile app designed to revolutionize how students explore and engage with their university environment. It offers intuitive, location-aware navigation paired with real-time alerts for nearby events, club activities, and campus hotspots.
+Using turn-by-turn navigation, students can easily locate classrooms, labs, and facilities, while staying informed about ongoing and upcoming events around them.
+The app is built using an open-source stack:
+React Native, MongoDB, and OpenStreetMap, ensuring a powerful yet manageable development workflow. It integrates with university calendars and club databases to provide accurate, up-to-date event info.
 
-The application helps students find their way to classrooms, labs, and campus facilities through turn-by-turn navigation while simultaneously alerting them to nearby events, club activities, and points of interest. As students move through campus, the app provides real-time notifications about ongoing and upcoming events in their vicinity.
+🔑 Key Features
+Moving personalized avatars on the map,
+Indoor/outdoor positioning,
+Augmented Reality for enhanced navigation,
+Real-time event discovery and notifications.
 
-Built on a streamlined open-source technology stack including React Native, MongoDB, and OpenStreetMap, the project balances sophisticated features with manageable development complexity. The application integrates with university calendar systems and club event databases to ensure all campus activities are accurately represented and discoverable.
+To validate the concept, we built a working prototype, enabling rapid testing and iteration of key features like map navigation and event modals.
 
-Key features include personalized avatars that move along the map, indoor/outdoor positioning, augmented reality elements for enhanced navigation, and a comprehensive events discovery system. The project addresses common campus challenges like finding classrooms in unfamiliar buildings, discovering relevant extracurricular activities, and making efficient use of campus resources.
-
-The Campus Navigator aims to increase student engagement, reduce time wasted on wayfinding, improve accessibility, and strengthen the campus community through better awareness of activities and locations. With moderate development costs and significant potential impact on student experience, the project represents a valuable addition to modern university digital infrastructure.
-<p align="center">
-  <img src="https://github.com/user-attachments/assets/1ee5ba3b-9392-4615-998f-db24716aea0f" alt="Screenshot 1" width="200" hspace="10"/>
+The app aims to:
+Boost student engagement
+Simplify campus wayfinding
+Improve access to campus events
+Strengthen community through increased awareness
+With low development costs and high impact, this solution brings smart, connected navigation to modern university life
   
-  <img src="https://github.com/user-attachments/assets/47193561-938d-46be-875b-732fe89a9fd2" alt="Screenshot 2" width="200" hspace="10"/>
   
-  <img src="https://github.com/user-attachments/assets/2ce08b4b-c341-4dbe-aac7-bf46c28a1a35" alt="Screenshot 3" width="200" hspace="10"/>
+  <img src="https://github.com/user-attachments/assets/47193561-938d-46be-875b-732fe89a9fd2" alt="Screenshot 2" width="100" hspace="20"/>
+  
+  <img src="https://github.com/user-attachments/assets/2ce08b4b-c341-4dbe-aac7-bf46c28a1a35" alt="Screenshot 3" width="100" hspace="20"/>
+  
+  <img src="https://github.com/user-attachments/assets/1ee5ba3b-9392-4615-998f-db24716aea0f" alt="Screenshot 1" width="100" hspace="20"/>
 </p>
 
 
